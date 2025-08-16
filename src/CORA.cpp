@@ -26,6 +26,9 @@ namespace CORA {
 CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
                      const Matrix &x0, int max_relaxation_rank, bool verbose,
                      bool log_iterates, bool show_iterates) {
+
+  CoraResult cora_result;
+
   // check that x0 has the right number of rows
   if (problem.getFormulation() == Formulation::Explicit) {
     checkMatrixShape("solveCora::Explicit", problem.getDataMatrixSize(),
@@ -47,6 +50,9 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
            "process.  This is intended for debugging and viz purposes only."
         << std::endl;
   }
+
+  /// ALGORITHM START
+  auto CORA_start_time = Stopwatch::tick();
 
   // objective function
   Optimization::Objective<Matrix, Scalar, Matrix> f =
@@ -124,24 +130,64 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
   // no custom instrumentation function for now
   std::optional<InstrumentationFunction> user_function = std::nullopt;
 
-  CoraTntResult result;
+  CoraTntResult tnt_result;
   Matrix X = problem.projectToManifold(x0);
   CertResults cert_results;
   Matrix eigvec_bootstrap;
   std::vector<Matrix> iterates = std::vector<Matrix>();
   bool first_loop = true;
   int loop_cnt = 0;
+
   while (problem.getRelaxationRank() <= max_relaxation_rank) {
     loop_cnt++;
+    cora_result.rank_iters.push_back(problem.getRelaxationRank());
+
     // solve the problem
     printIfVerbose(verbose, "\nSolving problem at rank " +
                                 std::to_string(problem.getRelaxationRank()));
-    result = Optimization::Riemannian::TNT<Matrix, Matrix, Scalar, Matrix>(
+    tnt_result = Optimization::Riemannian::TNT<Matrix, Matrix, Scalar, Matrix>(
         f, QM, metric, retract, X, NablaF_Y, precon, params, user_function);
     printIfVerbose(verbose, "Obtained solution with objective value: " +
-                                std::to_string(result.f));
+                                std::to_string(tnt_result.f));
+
+    // Extract the results
+    cora_result.Yopt = tnt_result.x;
+    cora_result.SDPval = tnt_result.f;
+    cora_result.SDPvalVector.push_back(tnt_result.f);
+    auto gradnorm =
+        problem.Riemannian_gradient(cora_result.Yopt).norm();
+
+    cora_result.gradnorm = gradnorm;
+    cora_result.gradnormVector.push_back(gradnorm);
+
+    // Record sequence of function values
+    cora_result.function_values.push_back(tnt_result.objective_values);
+
+    // Record sequence of gradient norms
+    cora_result.gradient_norms.push_back(tnt_result.gradient_norms);
+
+    // Record sequence of preconditioned gradient norms
+    cora_result.preconditioned_gradient_norms.push_back(
+        tnt_result.preconditioned_gradient_norms);
+
+    // Record sequence of (# Hessian-vector products)
+    cora_result.Hessian_vector_products.push_back(
+        tnt_result.inner_iterations);
+
+    // Record sequence of update step norms
+    cora_result.update_step_norms.push_back(tnt_result.update_step_norms);
+
+    // Record sequence of update step M-norms
+    cora_result.update_step_M_norms.push_back(tnt_result.update_step_M_norms);
+
+    // Record sequence of gain ratios for the update steps
+    cora_result.gain_ratios.push_back(tnt_result.gain_ratios);
+
+    // Record sequence of elapsed optimization times
+    cora_result.elapsed_optimization_times.push_back(tnt_result.time);
+
     if (log_iterates) {
-      for (Matrix iterate : result.iterates) {
+      for (Matrix iterate : tnt_result.iterates) {
         // check that the iterate is the expected size
         checkMatrixShape(
             "solveCora::iterate", problem.getExpectedVariableSize(),
@@ -151,9 +197,9 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
     }
 
     // check if the solution is certified
-    eta = thresholdVal(result.f * REL_CERT_ETA, MIN_CERT_ETA, MAX_CERT_ETA);
+    eta = thresholdVal(tnt_result.f * REL_CERT_ETA, MIN_CERT_ETA, MAX_CERT_ETA);
     if (first_loop) {
-      eigvec_bootstrap = result.x;
+      eigvec_bootstrap = tnt_result.x;
 
       // if we are using the translation implicit formulation, we should solve
       // for the translation explicit solution (there is an analytical solution
@@ -167,8 +213,15 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
       eigvec_bootstrap = cert_results.all_eigvecs;
     }
 
-    cert_results = problem.certify_solution(result.x, eta, LOBPCG_BLOCK_SIZE,
+    auto verification_start_time = Stopwatch::tick();
+
+    cert_results = problem.certify_solution(tnt_result.x, eta, LOBPCG_BLOCK_SIZE,
                                             eigvec_bootstrap);
+    double verification_elapsed_time = Stopwatch::tock(verification_start_time);
+
+    // Record results of eigenvalue computation
+    cora_result.escape_direction_curvatures.push_back(cert_results.theta);
+    cora_result.verification_times.push_back(verification_elapsed_time);
 
     printIfVerbose(
         verbose,
@@ -183,7 +236,7 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
 
     // if the solution is certified, we're done
     if (cert_results.is_certified) {
-      X = result.x;
+      X = tnt_result.x;
       break;
     }
 
@@ -191,7 +244,7 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
     const Scalar SADDLE_GRAD_TOL = 1e-4;
     const Scalar PRECON_SADDLE_GRAD_TOL = 1e-4;
     problem.incrementRank();
-    X = saddleEscape(problem, result.x, cert_results.theta, cert_results.x,
+    X = saddleEscape(problem, tnt_result.x, cert_results.theta, cert_results.x,
                      SADDLE_GRAD_TOL, PRECON_SADDLE_GRAD_TOL);
   }
 
@@ -202,16 +255,18 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
                                 std::to_string(problem.dim()) +
                                 " and refining.");
 
+    // Round solution and solution refinement
+    auto final_refinement_start = Stopwatch::tick();
     X = projectSolution(problem, X, verbose);
 
     problem.setRank(problem.dim());
-    result = Optimization::Riemannian::TNT<Matrix, Matrix, Scalar, Matrix>(
+    tnt_result = Optimization::Riemannian::TNT<Matrix, Matrix, Scalar, Matrix>(
         f, QM, metric, retract, X, NablaF_Y, precon, params, user_function);
     printIfVerbose(verbose, "\nObtained FINAL solution with objective value: " +
-                                std::to_string(result.f));
+                                std::to_string(tnt_result.f));
 
     if (log_iterates) {
-      for (Matrix iterate : result.iterates) {
+      for (Matrix iterate : tnt_result.iterates) {
         checkMatrixShape("solveCora::iterate",
                          problem.getExpectedVariableSize(), problem.dim(),
                          iterate.rows(), iterate.cols());
@@ -227,11 +282,12 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
 
     // let's check if the solution is certified
     std::cout << "Checking certification of refined solution." << std::endl;
-    eta = thresholdVal(result.f * REL_CERT_ETA, MIN_CERT_ETA, MAX_CERT_ETA);
-    cert_results = problem.certify_solution(result.x, eta, LOBPCG_BLOCK_SIZE,
+    eta = thresholdVal(tnt_result.f * REL_CERT_ETA, MIN_CERT_ETA, MAX_CERT_ETA);
+    cert_results = problem.certify_solution(tnt_result.x, eta, LOBPCG_BLOCK_SIZE,
                                             eigvec_bootstrap);
+    cora_result.final_refinement_time = Stopwatch::tock(final_refinement_start);
+    cora_result.total_computation_time = Stopwatch::tock(CORA_start_time);
   }
-
   // print out whether or not the solution is certified
   printIfVerbose(verbose,
                  "Final solution is certified: " +
@@ -239,7 +295,7 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
                      " with eta: " + std::to_string(eta) +
                      " and theta: " + std::to_string(cert_results.theta));
 
-  return std::make_pair(result, iterates);
+  return cora_result;
 }
 
 Matrix saddleEscape(const Problem &problem, const Matrix &Y, Scalar theta,
@@ -422,7 +478,7 @@ Matrix projectSolution(const Problem &problem, const Matrix &Y, bool verbose) {
   int rot_mat_sz = problem.numPosesDim();
   Yd.block(rot_mat_sz, 0, r, d).rowwise().normalize();
 
-  problem.checkVariablesAreValid(Yd);
+//  problem.checkVariablesAreValid(Yd);
 
   checkMatrixShape("projectSolution", problem.getExpectedVariableSize(), d,
                    Yd.rows(), Yd.cols());

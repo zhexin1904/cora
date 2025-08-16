@@ -1203,7 +1203,9 @@ void Problem::checkVariablesAreValid(const Matrix &Y) const {
   for (int i = 0; i < numPoses(); ++i) {
     Matrix rot_block = Y.block(i * dim_, 0, dim_, Y.cols());
     // check R * R^T = I
+    // For debug i suddenly becomes 0 and cerror
     Matrix rot_prod = rot_block * rot_block.transpose();
+    std::cout << "rot_prod at  " << i << " : \n" << rot_prod.matrix() <<  std::endl;
     if (!rot_prod.isApprox(Matrix::Identity(dim_, dim_))) {
       std::cout << "R^T R for pose " << i << " is not the identity"
                 << std::endl;

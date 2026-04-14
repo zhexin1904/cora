@@ -1,0 +1,16 @@
+field,index,value
+SDPval,0,2
+SDPval,1,1.02181e-12
+SDPval,2,9.27414e-14
+SDPval,3,9.27414e-14
+gradnorm,0,1.23754e-10
+startingRank,0,2
+endingRank,0,3
+initialization_time,0,0
+elapsed_optimization_times,0,0
+elapsed_optimization_times,1,0
+elapsed_optimization_times,2,0
+verification_times,0,0
+verification_times,1,0
+FinalOptimizationTime,0,0
+FinalTotalTime,0,0.001

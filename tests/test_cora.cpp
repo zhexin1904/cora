@@ -53,7 +53,27 @@ CoraTntResult testScenario(std::string data_subdir) {
                    problem.getDataMatrixSize(), 2, X_gt.rows(), X_gt.cols());
 
   CoraTntResult res;
-  res = solveCORA(problem, x0).first;
+  CoraResult cora_res;
+  cora_res = solveCORA(problem, x0);
+  res.f = cora_res.SDPval;
+  res.x = cora_res.Yopt;
+  res.gradfx_norm = cora_res.gradnorm;
+  if (!cora_res.function_values.empty()) {
+    res.objective_values = cora_res.function_values.back();
+  }
+  if (!cora_res.gradient_norms.empty()) {
+    res.gradient_norms = cora_res.gradient_norms.back();
+  }
+  if (!cora_res.preconditioned_gradient_norms.empty()) {
+    res.preconditioned_gradient_norms =
+        cora_res.preconditioned_gradient_norms.back();
+  }
+  if (!cora_res.update_step_norms.empty()) {
+    res.update_step_norms = cora_res.update_step_norms.back();
+  }
+  if (!cora_res.iterates.empty()) {
+    res.iterates = cora_res.iterates.back();
+  }
 
   // some print output for debugging
   // std::cout << "Testing with Random initialization" << std::endl;

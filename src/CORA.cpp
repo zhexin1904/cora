@@ -25,7 +25,9 @@ namespace CORA {
 
 CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
                      const Matrix &x0, int max_relaxation_rank, bool verbose,
-                     bool log_iterates, bool show_iterates) {
+                     bool log_iterates, bool show_iterates,
+                     std::optional<Optimization::Riemannian::TNTParams<Scalar>>
+                         tnt_params) {
 
   CoraResult cora_result;
 
@@ -99,20 +101,24 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
 
   // default TNT parameters for CORA
   Optimization::Riemannian::TNTParams<Scalar> params;
-  params.Delta0 = 5;
-  params.alpha2 = 3.0;
-  params.max_TPCG_iterations = 80;
-  params.max_iterations = 250;
-  params.preconditioned_gradient_tolerance = 1e-6;
-  params.gradient_tolerance = 1e-6;
-  params.theta = 0.8;
-  params.Delta_tolerance = 1e-5;
-  params.verbose = show_iterates;
-  params.precision = 2;
-  params.max_computation_time = 20;
-  params.relative_decrease_tolerance = 1e-6;
-  params.stepsize_tolerance = 1e-6;
-  params.log_iterates = log_iterates;
+  if (tnt_params.has_value()) {
+    params = tnt_params.value();
+  } else {
+    params.Delta0 = 5;
+    params.alpha2 = 3.0;
+    params.max_TPCG_iterations = 500;
+    params.max_iterations = 300;
+    params.preconditioned_gradient_tolerance = 1e-6;
+    params.gradient_tolerance = 1e-6;
+    params.theta = 0.8;
+    params.Delta_tolerance = 1e-5;
+    params.verbose = show_iterates;
+    params.precision = 2;
+    params.max_computation_time = 20;
+    params.relative_decrease_tolerance = 1e-6;
+    params.stepsize_tolerance = 1e-6;
+    params.log_iterates = log_iterates;
+  }
 
   // certification parameters
   const Scalar MIN_CERT_ETA = 1e-7;
@@ -264,6 +270,25 @@ CoraResult solveCORA(Problem &problem, // NOLINT(runtime/references)
         f, QM, metric, retract, X, NablaF_Y, precon, params, user_function);
     printIfVerbose(verbose, "\nObtained FINAL solution with objective value: " +
                                 std::to_string(tnt_result.f));
+
+    // Update CORA results
+    cora_result.Yopt = tnt_result.x;
+    cora_result.SDPval = tnt_result.f;
+    cora_result.SDPvalVector.push_back(tnt_result.f);
+    auto gradnorm = problem.Riemannian_gradient(cora_result.Yopt).norm();
+    cora_result.gradnorm = gradnorm;
+    cora_result.gradnormVector.push_back(gradnorm);
+
+    cora_result.function_values.push_back(tnt_result.objective_values);
+    cora_result.gradient_norms.push_back(tnt_result.gradient_norms);
+    cora_result.preconditioned_gradient_norms.push_back(
+        tnt_result.preconditioned_gradient_norms);
+    cora_result.Hessian_vector_products.push_back(tnt_result.inner_iterations);
+    cora_result.update_step_norms.push_back(tnt_result.update_step_norms);
+    cora_result.update_step_M_norms.push_back(tnt_result.update_step_M_norms);
+    cora_result.gain_ratios.push_back(tnt_result.gain_ratios);
+    cora_result.elapsed_optimization_times.push_back(tnt_result.time);
+    cora_result.rank_iters.push_back(problem.getRelaxationRank());
 
     if (log_iterates) {
       for (Matrix iterate : tnt_result.iterates) {

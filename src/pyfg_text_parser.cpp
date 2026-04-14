@@ -155,6 +155,9 @@ Problem parsePyfgTextToProblem(const std::string &filename) {
     }
 
     if (PyFGStringToType.find(item_type) == PyFGStringToType.end()) {
+      if (item_type == "FIX") {
+        continue;
+      }
       throw std::runtime_error("Unknown item type " + item_type);
     }
 

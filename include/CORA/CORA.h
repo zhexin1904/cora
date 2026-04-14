@@ -139,7 +139,9 @@ struct CoraResult{
 
 CoraResult solveCORA(Problem &problem, const Matrix &x0,
                      int max_relaxation_rank = 20, bool verbose = false,
-                     bool log_iterates = false, bool show_iterates = false);
+                     bool log_iterates = false, bool show_iterates = false,
+                     std::optional<Optimization::Riemannian::TNTParams<Scalar>>
+                         params = std::nullopt);
 inline CoraResult solveCORA(std::string filepath) {
   Problem problem = parsePyfgTextToProblem(filepath);
   Matrix x0 = Matrix();
